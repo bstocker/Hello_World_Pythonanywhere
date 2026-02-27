@@ -22,63 +22,27 @@ jobs:
           : "${{ secrets.PA_TARGET_DIR }}"
           : "${{ secrets.PA_WEBAPP_DOMAIN }}"
 
-      - name: Create remote directories (recursive)
+      - name: Upload all files recursively (dirs auto-created by Files API)
         shell: bash
         run: |
           set -euo pipefail
           USER="${{ secrets.PA_USERNAME }}"
           TOKEN="${{ secrets.PA_TOKEN }}"
           TARGET_DIR="${{ secrets.PA_TARGET_DIR }}"
+          DOMAIN="${{ secrets.PA_WEBAPP_DOMAIN }}"
 
-          # Collect all directories that contain deployable files, excluding common junk.
-          mapfile -t DIRS < <(
-            find . \
-              -type d \( -name .git -o -name .github -o -name .venv -o -name __pycache__ -o -name node_modules \) -prune -false \
-              -o -type f \
-                ! -name ".DS_Store" \
-                ! -name "*.pyc" \
-                ! -path "./.git/*" \
-                ! -path "./.github/*" \
-                ! -path "./.venv/*" \
-                ! -path "./__pycache__/*" \
-                ! -path "./node_modules/*" \
-                -print \
-            | sed 's|^\./||' \
-            | xargs -r -n1 dirname \
-            | sort -u
-          )
+          # Optional: set PA_HOST secret to "eu.pythonanywhere.com" if your account is on EU.
+          HOST="${{ secrets.PA_HOST }}"
+          if [[ -z "${HOST}" ]]; then HOST="www.pythonanywhere.com"; fi
 
-          # Always ensure base dir exists
-          MKDIR_CMD="mkdir -p '${TARGET_DIR}'"
-          for d in "${DIRS[@]}"; do
-            # Skip "." (repo root)
-            if [[ "$d" != "." ]]; then
-              MKDIR_CMD+=" '${TARGET_DIR}/${d}'"
-            fi
-          done
+          echo "Using PythonAnywhere host: ${HOST}"
+          echo "Target directory: ${TARGET_DIR}"
 
-          echo "Creating remote dirs on PythonAnywhere..."
-          curl -sS --fail -X POST \
-            -H "Authorization: Token ${TOKEN}" \
-            "https://www.pythonanywhere.com/api/v0/user/${USER}/consoles/bash/" \
-            -d "executable=/bin/bash" \
-            -d "arguments=-lc" \
-            -d "arguments=${MKDIR_CMD}" \
-            >/dev/null
-
-      - name: Upload all files recursively
-        shell: bash
-        run: |
-          set -euo pipefail
-          USER="${{ secrets.PA_USERNAME }}"
-          TOKEN="${{ secrets.PA_TOKEN }}"
-          TARGET_DIR="${{ secrets.PA_TARGET_DIR }}"
-
-          echo "Uploading files..."
-          # NOTE: Avoid spaces/special chars in paths. If you have them, rename files/folders.
+          # Upload every file; remote directories are created automatically by the Files API.
           while IFS= read -r -d '' file; do
             rel="${file#./}"
-            # Exclude any leftover undesired paths (defense-in-depth)
+
+            # Exclusions (adjust to taste)
             case "$rel" in
               .git/*|.github/*|.venv/*|__pycache__/*|node_modules/*) continue ;;
               *.pyc|.DS_Store) continue ;;
@@ -90,7 +54,7 @@ jobs:
             curl -sS --fail -X POST \
               -H "Authorization: Token ${TOKEN}" \
               -F "content=@${file}" \
-              "https://www.pythonanywhere.com/api/v0/user/${USER}/files/path${remote_path}" \
+              "https://${HOST}/api/v0/user/${USER}/files/path${remote_path}" \
               >/dev/null
 
           done < <(
@@ -102,18 +66,10 @@ jobs:
                 -print0
           )
 
-      - name: Reload PythonAnywhere webapp
-        shell: bash
-        run: |
-          set -euo pipefail
-          USER="${{ secrets.PA_USERNAME }}"
-          TOKEN="${{ secrets.PA_TOKEN }}"
-          DOMAIN="${{ secrets.PA_WEBAPP_DOMAIN }}"
-
           echo "Reloading webapp ${DOMAIN}..."
           curl -sS --fail -X POST \
             -H "Authorization: Token ${TOKEN}" \
-            "https://www.pythonanywhere.com/api/v0/user/${USER}/webapps/${DOMAIN}/reload/" \
+            "https://${HOST}/api/v0/user/${USER}/webapps/${DOMAIN}/reload/" \
             >/dev/null
 
           echo "Deployed. Try: https://${DOMAIN}/"
